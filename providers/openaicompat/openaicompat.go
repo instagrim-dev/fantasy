@@ -108,6 +108,15 @@ func WithObjectMode(om fantasy.ObjectMode) Option {
 	}
 }
 
+// WithLanguageModelOption adds a language-model option to the underlying
+// OpenAI implementation. Provider-specific compat wrappers can use this to
+// override the default prepare/stream hooks without forking the whole provider.
+func WithLanguageModelOption(opt openai.LanguageModelOption) Option {
+	return func(o *options) {
+		o.languageModelOptions = append(o.languageModelOptions, opt)
+	}
+}
+
 // WithUserAgent sets an explicit User-Agent header, overriding the default and any
 // value set via WithHeaders.
 func WithUserAgent(ua string) Option {

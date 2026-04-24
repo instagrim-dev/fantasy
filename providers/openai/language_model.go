@@ -419,7 +419,7 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 							toolCallDelta.Type = cmp.Or(toolCallDelta.Type, "function")
 							toolCallDelta.ID = cmp.Or(toolCallDelta.ID, fmt.Sprintf("tool-call-%d", toolCallDelta.Index))
 
-							if toolCallDelta.Type != "function" {
+							if toolCallDelta.Type != "" && toolCallDelta.Type != "function" {
 								yield(fantasy.StreamPart{
 									Type:  fantasy.StreamPartTypeError,
 									Error: &fantasy.Error{Title: "invalid provider response", Message: "expected 'function' type."},
