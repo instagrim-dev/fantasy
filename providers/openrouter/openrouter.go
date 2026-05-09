@@ -75,6 +75,13 @@ func WithName(name string) Option {
 	}
 }
 
+// WithBaseURL overrides the default OpenRouter API URL.
+func WithBaseURL(url string) Option {
+	return func(o *options) {
+		o.openaiOptions = append(o.openaiOptions, openai.WithBaseURL(url))
+	}
+}
+
 // WithHeaders sets the headers for the OpenRouter provider.
 func WithHeaders(headers map[string]string) Option {
 	return func(o *options) {
