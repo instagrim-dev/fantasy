@@ -10,6 +10,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 
 	"charm.land/fantasy/schema"
 	"github.com/charmbracelet/x/exp/slice"
@@ -238,8 +239,19 @@ type (
 	// OnToolCallFunc is called when tool call is complete.
 	OnToolCallFunc func(toolCall ToolCallContent) error
 
+	// PreToolExecuteFunc is called before tool execution.
+	// Can modify the tool call or return an error to skip execution.
+	// Returning a modified ToolCall allows changing input parameters.
+	// Returning an error creates an error result without executing the tool.
+	PreToolExecuteFunc func(ctx context.Context, toolCall ToolCall) (context.Context, *ToolCall, error)
+
 	// OnToolResultFunc is called when tool execution completes.
 	OnToolResultFunc func(result ToolResultContent) error
+
+	// PostToolExecuteFunc is called after tool execution, before sending result to LLM.
+	// Can modify the tool response or return an error to replace the response.
+	// Returning a modified ToolResponse allows filtering or redacting output.
+	PostToolExecuteFunc func(ctx context.Context, toolCall ToolCall, response ToolResponse, executionTimeMs int64) (*ToolResponse, error)
 
 	// OnSourceFunc is called for source references.
 	OnSourceFunc func(source SourceContent) error
@@ -291,7 +303,9 @@ type AgentStreamCall struct {
 	OnToolInputDelta OnToolInputDeltaFunc // Called for tool input deltas
 	OnToolInputEnd   OnToolInputEndFunc   // Called when tool input ends
 	OnToolCall       OnToolCallFunc       // Called when tool call is complete
+	PreToolExecute   PreToolExecuteFunc   // Called before tool execution (can modify input or block)
 	OnToolResult     OnToolResultFunc     // Called when tool execution completes
+	PostToolExecute  PostToolExecuteFunc  // Called after tool execution (can modify output)
 	OnSource         OnSourceFunc         // Called for source references
 	OnStreamFinish   OnStreamFinishFunc   // Called when stream finishes
 }
@@ -490,7 +504,7 @@ func (a *agent) Generate(ctx context.Context, opts AgentCall) (*AgentResult, err
 			}
 		}
 
-		toolResults, err := a.executeTools(ctx, stepTools, stepExecProviderTools, stepToolCalls, nil)
+		toolResults, err := a.executeTools(ctx, stepTools, stepExecProviderTools, stepToolCalls, nil, nil, nil)
 
 		// If any tool result requested a stop, deliver all results but don't
 		// request another completion from the model.
@@ -670,7 +684,7 @@ func toResponseMessages(content []Content) []Message {
 	return messages
 }
 
-func (a *agent) executeTools(ctx context.Context, allTools []AgentTool, execProviderTools []ExecutableProviderTool, toolCalls []ToolCallContent, toolResultCallback func(result ToolResultContent) error) ([]ToolResultContent, error) {
+func (a *agent) executeTools(ctx context.Context, allTools []AgentTool, execProviderTools []ExecutableProviderTool, toolCalls []ToolCallContent, toolResultCallback func(result ToolResultContent) error, preToolExecute PreToolExecuteFunc, postToolExecute PostToolExecuteFunc) ([]ToolResultContent, error) {
 	if len(toolCalls) == 0 {
 		return nil, nil
 	}
@@ -690,7 +704,7 @@ func (a *agent) executeTools(ctx context.Context, allTools []AgentTool, execProv
 	results := make([]ToolResultContent, 0, len(toolCalls))
 
 	for _, toolCall := range toolCalls {
-		result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, toolCall, toolResultCallback)
+		result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, toolCall, toolResultCallback, preToolExecute, postToolExecute)
 		results = append(results, result)
 		if isCriticalError {
 			if errorResult, ok := result.Result.(ToolResultOutputContentError); ok && errorResult.Error != nil {
@@ -703,7 +717,7 @@ func (a *agent) executeTools(ctx context.Context, allTools []AgentTool, execProv
 }
 
 // executeSingleTool executes a single tool and returns its result and a critical error flag.
-func (a *agent) executeSingleTool(ctx context.Context, toolMap map[string]AgentTool, execProviderToolMap map[string]ExecutableProviderTool, toolCall ToolCallContent, toolResultCallback func(result ToolResultContent) error) (ToolResultContent, bool) {
+func (a *agent) executeSingleTool(ctx context.Context, toolMap map[string]AgentTool, execProviderToolMap map[string]ExecutableProviderTool, toolCall ToolCallContent, toolResultCallback func(result ToolResultContent) error, preToolExecute PreToolExecuteFunc, postToolExecute PostToolExecuteFunc) (ToolResultContent, bool) {
 	result := ToolResultContent{
 		ToolCallID:       toolCall.ToolCallID,
 		ToolName:         toolCall.ToolName,
@@ -739,12 +753,50 @@ func (a *agent) executeSingleTool(ctx context.Context, toolMap map[string]AgentT
 		return result, false
 	}
 
-	// Execute the tool
-	toolResult, err := runTool(ctx, ToolCall{
+	executionToolCall := ToolCall{
 		ID:    toolCall.ToolCallID,
 		Name:  toolCall.ToolName,
 		Input: toolCall.Input,
-	})
+	}
+
+	toolCtx := ctx
+	if preToolExecute != nil {
+		updatedCtx, modifiedCall, err := preToolExecute(ctx, executionToolCall)
+		if err != nil {
+			result.Result = ToolResultOutputContentError{
+				Error: err,
+			}
+			if toolResultCallback != nil {
+				_ = toolResultCallback(result)
+			}
+			return result, false
+		}
+		toolCtx = updatedCtx
+		if modifiedCall != nil {
+			executionToolCall = *modifiedCall
+		}
+	}
+
+	startTime := time.Now()
+	toolResult, err := runTool(toolCtx, executionToolCall)
+	executionTimeMs := time.Since(startTime).Milliseconds()
+	if postToolExecute != nil && err == nil {
+		modifiedResponse, postErr := postToolExecute(ctx, executionToolCall, toolResult, executionTimeMs)
+		if postErr != nil {
+			result.Result = ToolResultOutputContentError{
+				Error: postErr,
+			}
+			result.ClientMetadata = toolResult.Metadata
+			result.StopTurn = toolResult.StopTurn
+			if toolResultCallback != nil {
+				_ = toolResultCallback(result)
+			}
+			return result, true
+		}
+		if modifiedResponse != nil {
+			toolResult = *modifiedResponse
+		}
+	}
 	if err != nil {
 		result.Result = ToolResultOutputContentError{
 			Error: err,
@@ -1548,7 +1600,7 @@ func (a *agent) processStepStream(ctx context.Context, stream StreamResponse, op
 				parallelSem <- struct{}{}
 				toolExecutionWg.Go(func() {
 					defer func() { <-parallelSem }()
-					result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, req.toolCall, opts.OnToolResult)
+					result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, req.toolCall, opts.OnToolResult, opts.PreToolExecute, opts.PostToolExecute)
 					toolStateMu.Lock()
 					toolResults = append(toolResults, result)
 					if isCriticalError && toolExecutionErr == nil {
@@ -1560,7 +1612,7 @@ func (a *agent) processStepStream(ctx context.Context, stream StreamResponse, op
 				})
 			} else {
 				sequentialMu.Lock()
-				result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, req.toolCall, opts.OnToolResult)
+				result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, req.toolCall, opts.OnToolResult, opts.PreToolExecute, opts.PostToolExecute)
 				toolStateMu.Lock()
 				toolResults = append(toolResults, result)
 				if isCriticalError && toolExecutionErr == nil {

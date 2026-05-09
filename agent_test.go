@@ -1973,6 +1973,82 @@ func TestToResponseMessages_ProviderExecutedRouting(t *testing.T) {
 	require.False(t, tr2.ProviderExecuted)
 }
 
+func TestAgentExecuteTools_PreservesExecutableProviderToolsAndHooks(t *testing.T) {
+	t.Parallel()
+
+	regularTool := &mockTool{
+		name: "regular",
+		executeFunc: func(ctx context.Context, call ToolCall) (ToolResponse, error) {
+			require.Equal(t, `{"value":"from-pre"}`, call.Input)
+			return ToolResponse{
+				Type:     "text",
+				Content:  "regular result",
+				Metadata: "regular-meta",
+			}, nil
+		},
+	}
+	execTool := NewExecutableProviderTool(
+		ProviderDefinedTool{
+			ID:   "test.computer",
+			Name: "computer",
+		},
+		func(ctx context.Context, call ToolCall) (ToolResponse, error) {
+			require.Equal(t, `{"action":"from-pre"}`, call.Input)
+			return NewImageResponse([]byte{1, 2, 3}, "image/png"), nil
+		},
+	)
+
+	var preCalls, postCalls int
+	pre := func(ctx context.Context, call ToolCall) (context.Context, *ToolCall, error) {
+		preCalls++
+		switch call.Name {
+		case "regular":
+			call.Input = `{"value":"from-pre"}`
+		case "computer":
+			call.Input = `{"action":"from-pre"}`
+		}
+		return ctx, &call, nil
+	}
+	post := func(ctx context.Context, call ToolCall, response ToolResponse, executionTimeMs int64) (*ToolResponse, error) {
+		postCalls++
+		if call.Name == "regular" {
+			response.Content = "post-filtered"
+			response.Metadata = "post-meta"
+		}
+		return &response, nil
+	}
+
+	a := &agent{}
+	results, err := a.executeTools(
+		context.Background(),
+		[]AgentTool{regularTool},
+		[]ExecutableProviderTool{execTool},
+		[]ToolCallContent{
+			{ToolCallID: "regular-1", ToolName: "regular", Input: `{"value":"original"}`},
+			{ToolCallID: "computer-1", ToolName: "computer", Input: `{"action":"original"}`},
+		},
+		nil,
+		pre,
+		post,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, preCalls)
+	require.Equal(t, 2, postCalls)
+	require.Len(t, results, 2)
+
+	require.Equal(t, "regular-1", results[0].ToolCallID)
+	text, ok := results[0].Result.(ToolResultOutputContentText)
+	require.True(t, ok)
+	require.Equal(t, "post-filtered", text.Text)
+	require.Equal(t, "post-meta", results[0].ClientMetadata)
+
+	require.Equal(t, "computer-1", results[1].ToolCallID)
+	media, ok := results[1].Result.(ToolResultOutputContentMedia)
+	require.True(t, ok)
+	require.Equal(t, "AQID", media.Data)
+	require.Equal(t, "image/png", media.MediaType)
+}
+
 // TestAgent_Generate_ExecutableProviderTool verifies that an
 // ExecutableProviderTool registered via WithProviderDefinedTools is
 // executed by the agent when the model returns a matching tool call.
