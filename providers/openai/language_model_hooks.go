@@ -102,6 +102,11 @@ func DefaultPrepareCallFunc(model fantasy.LanguageModel, params *openai.ChatComp
 	if providerOptions.PromptCacheKey != nil {
 		params.PromptCacheKey = param.NewOpt(*providerOptions.PromptCacheKey)
 	}
+	if providerOptions.PromptCacheRetention != nil {
+		if r, ok := mapOpenAIPromptCacheRetention(*providerOptions.PromptCacheRetention); ok {
+			params.PromptCacheRetention = r
+		}
+	}
 	if providerOptions.SafetyIdentifier != nil {
 		params.SafetyIdentifier = param.NewOpt(*providerOptions.SafetyIdentifier)
 	}
@@ -638,6 +643,17 @@ func toolResultMediaUserPart(output fantasy.ToolResultOutputContentMedia) (opena
 			Type:    fantasy.CallWarningTypeOther,
 			Message: fmt.Sprintf("tool result media type %s not supported, sending text placeholder only", output.MediaType),
 		}, false
+	}
+}
+
+func mapOpenAIPromptCacheRetention(s string) (openai.ChatCompletionNewParamsPromptCacheRetention, bool) {
+	switch strings.TrimSpace(strings.ToLower(s)) {
+	case "in-memory", "in_memory":
+		return openai.ChatCompletionNewParamsPromptCacheRetentionInMemory, true
+	case "24h":
+		return openai.ChatCompletionNewParamsPromptCacheRetention24h, true
+	default:
+		return "", false
 	}
 }
 

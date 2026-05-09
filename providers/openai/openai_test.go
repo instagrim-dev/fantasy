@@ -1796,6 +1796,37 @@ func TestDoGenerate(t *testing.T) {
 		require.Equal(t, "Hello", message["content"])
 	})
 
+	t.Run("should send prompt_cache_retention extension value", func(t *testing.T) {
+		t.Parallel()
+
+		server := newMockServer()
+		defer server.close()
+
+		server.prepareJSONResponse(map[string]any{
+			"content": "",
+		})
+
+		provider, err := New(
+			WithAPIKey("test-api-key"),
+			WithBaseURL(server.server.URL),
+		)
+		require.NoError(t, err)
+		model, _ := provider.LanguageModel(t.Context(), "gpt-3.5-turbo")
+
+		_, err = model.Generate(context.Background(), fantasy.Call{
+			Prompt: testPrompt,
+			ProviderOptions: NewProviderOptions(&ProviderOptions{
+				PromptCacheRetention: new("24h"),
+			}),
+		})
+
+		require.NoError(t, err)
+		require.Len(t, server.calls, 1)
+
+		call := server.calls[0]
+		require.Equal(t, "24h", call.body["prompt_cache_retention"])
+	})
+
 	t.Run("should send safety_identifier extension value", func(t *testing.T) {
 		t.Parallel()
 

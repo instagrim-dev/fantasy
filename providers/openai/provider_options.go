@@ -99,9 +99,12 @@ type ProviderOptions struct {
 	Store               *bool            `json:"store"`
 	Metadata            map[string]any   `json:"metadata"`
 	PromptCacheKey      *string          `json:"prompt_cache_key"`
-	SafetyIdentifier    *string          `json:"safety_identifier"`
-	ServiceTier         *string          `json:"service_tier"`
-	StructuredOutputs   *bool            `json:"structured_outputs"`
+	// PromptCacheRetention sets prompt cache retention (OpenAI: "in-memory" or "24h"). See
+	// https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-retention
+	PromptCacheRetention *string `json:"prompt_cache_retention"`
+	SafetyIdentifier     *string `json:"safety_identifier"`
+	ServiceTier          *string `json:"service_tier"`
+	StructuredOutputs    *bool   `json:"structured_outputs"`
 }
 
 // Options implements the ProviderOptions interface.

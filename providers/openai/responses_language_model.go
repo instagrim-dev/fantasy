@@ -22,6 +22,17 @@ import (
 
 const topLogprobsMax = 20
 
+func mapResponsesPromptCacheRetention(s string) (responses.ResponseNewParamsPromptCacheRetention, bool) {
+	switch strings.TrimSpace(strings.ToLower(s)) {
+	case "in-memory", "in_memory":
+		return responses.ResponseNewParamsPromptCacheRetentionInMemory, true
+	case "24h":
+		return responses.ResponseNewParamsPromptCacheRetention24h, true
+	default:
+		return "", false
+	}
+}
+
 type responsesLanguageModel struct {
 	provider   string
 	modelID    string
@@ -245,6 +256,11 @@ func (o responsesLanguageModel) prepareParams(call fantasy.Call) (*responses.Res
 		}
 		if openaiOptions.PromptCacheKey != nil {
 			params.PromptCacheKey = param.NewOpt(*openaiOptions.PromptCacheKey)
+		}
+		if openaiOptions.PromptCacheRetention != nil {
+			if r, ok := mapResponsesPromptCacheRetention(*openaiOptions.PromptCacheRetention); ok {
+				params.PromptCacheRetention = r
+			}
 		}
 		if openaiOptions.SafetyIdentifier != nil {
 			params.SafetyIdentifier = param.NewOpt(*openaiOptions.SafetyIdentifier)

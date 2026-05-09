@@ -150,12 +150,14 @@ type ResponsesProviderOptions struct {
 	// PreviousResponseID chains this request to a prior stored response, enabling
 	// server-side conversation state. When set, the prompt should contain only the
 	// new incremental turn—not replayed assistant history.
-	PreviousResponseID *string          `json:"previous_response_id"`
-	PromptCacheKey     *string          `json:"prompt_cache_key"`
-	ReasoningEffort    *ReasoningEffort `json:"reasoning_effort"`
-	ReasoningSummary   *string          `json:"reasoning_summary"`
-	SafetyIdentifier   *string          `json:"safety_identifier"`
-	ServiceTier        *ServiceTier     `json:"service_tier"`
+	PreviousResponseID *string `json:"previous_response_id"`
+	PromptCacheKey     *string `json:"prompt_cache_key"`
+	// PromptCacheRetention sets prompt cache retention for the Responses API ("in-memory" or "24h").
+	PromptCacheRetention *string          `json:"prompt_cache_retention"`
+	ReasoningEffort      *ReasoningEffort `json:"reasoning_effort"`
+	ReasoningSummary     *string          `json:"reasoning_summary"`
+	SafetyIdentifier     *string          `json:"safety_identifier"`
+	ServiceTier          *ServiceTier     `json:"service_tier"`
 	// Store indicates whether OpenAI should persist this response for future
 	// retrieval and chaining via PreviousResponseID. Defaults to false to prevent
 	// unintended storage of potentially sensitive conversations.
