@@ -18,6 +18,7 @@ import (
 	"charm.land/fantasy/object"
 	"charm.land/fantasy/providers/internal/httpheaders"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/charmbracelet/anthropic-sdk-go"
 	"github.com/charmbracelet/anthropic-sdk-go/bedrock"
 	"github.com/charmbracelet/anthropic-sdk-go/option"
@@ -132,8 +133,9 @@ type options struct {
 	vertexLocation string
 	skipAuth       bool
 
-	useBedrock    bool
-	bedrockRegion string
+	useBedrock         bool
+	bedrockRegion      string
+	bedrockAWSLoadOpts []func(*config.LoadOptions) error
 
 	objectMode fantasy.ObjectMode
 }
@@ -202,6 +204,16 @@ func WithBedrock() Option {
 func WithBedrockRegion(region string) Option {
 	return func(o *options) {
 		o.bedrockRegion = region
+	}
+}
+
+// WithBedrockAWSLoadOpts passes explicit AWS SDK config load options to the
+// Bedrock credential loading path. When set, LoadDefaultConfig uses these
+// options instead of relying on process environment variables alone. This
+// eliminates TOCTOU races in multi-provider processes.
+func WithBedrockAWSLoadOpts(opts ...func(*config.LoadOptions) error) Option {
+	return func(o *options) {
+		o.bedrockAWSLoadOpts = opts
 	}
 }
 
@@ -292,8 +304,20 @@ func (a *provider) LanguageModel(ctx context.Context, modelID string) (fantasy.L
 				bedrock.WithConfig(bedrockBasicAuthConfig(a.options.apiKey, a.options.bedrockRegion)),
 			)
 		} else {
-			if cfg, err := config.LoadDefaultConfig(ctx); err == nil {
+			if cfg, err := config.LoadDefaultConfig(ctx, a.options.bedrockAWSLoadOpts...); err == nil {
 				cfg.Region = cmp.Or(a.options.bedrockRegion, cfg.Region)
+				// Eagerly resolve credentials so the signing middleware
+				// never calls back into a lazy provider that depends on
+				// process env vars which may have changed by request time.
+				if cfg.Credentials != nil {
+					if creds, err := cfg.Credentials.Retrieve(ctx); err == nil {
+						cfg.Credentials = credentials.NewStaticCredentialsProvider(
+							creds.AccessKeyID,
+							creds.SecretAccessKey,
+							creds.SessionToken,
+						)
+					}
+				}
 				clientOptions = append(
 					clientOptions,
 					bedrock.WithConfig(cfg),
