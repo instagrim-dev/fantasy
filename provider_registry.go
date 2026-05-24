@@ -86,9 +86,9 @@ func MarshalProviderType[T any](typeID string, data T) ([]byte, error) {
 	})
 }
 
-// UnmarshalProviderType unmarshals provider data without type wrapper using generics.
+// UnmarshalProviderType unmarshals provider data produced by MarshalProviderType.
+// It accepts either the wrapped {"type","data"} envelope or a legacy plain object.
 // To avoid infinite recursion, unmarshal to a plain type first.
-// Note: This receives the inner 'data' field after type routing by the registry.
 //
 // Usage in provider types:
 //
@@ -102,5 +102,11 @@ func MarshalProviderType[T any](typeID string, data T) ([]byte, error) {
 //	    return nil
 //	}
 func UnmarshalProviderType[T any](data []byte, target *T) error {
+	var wrapped providerDataJSON
+	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.Type != "" && len(wrapped.Data) > 0 {
+		if _, exists := providerRegistry.Load(wrapped.Type); exists {
+			return json.Unmarshal(wrapped.Data, target)
+		}
+	}
 	return json.Unmarshal(data, target)
 }
