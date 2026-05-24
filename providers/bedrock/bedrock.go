@@ -4,6 +4,7 @@ package bedrock
 import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/charmbracelet/anthropic-sdk-go/option"
 )
 
@@ -83,5 +84,13 @@ func WithSkipAuth(skipAuth bool) Option {
 func WithRegion(region string) Option {
 	return func(o *options) {
 		o.anthropicOptions = append(o.anthropicOptions, anthropic.WithBedrockRegion(region))
+	}
+}
+
+// WithAWSLoadOpts passes explicit AWS SDK config load options so
+// LoadDefaultConfig binds credentials without reading process env vars.
+func WithAWSLoadOpts(opts ...func(*awsconfig.LoadOptions) error) Option {
+	return func(o *options) {
+		o.anthropicOptions = append(o.anthropicOptions, anthropic.WithBedrockAWSLoadOpts(opts...))
 	}
 }
