@@ -68,6 +68,14 @@ func WithAPIKey(apiKey string) Option {
 	}
 }
 
+// WithBaseURL overrides the OpenRouter API base URL.
+// BMO still relies on this exported shim for provider-factory compatibility.
+func WithBaseURL(baseURL string) Option {
+	return func(o *options) {
+		o.openaiOptions = append(o.openaiOptions, openai.WithBaseURL(baseURL))
+	}
+}
+
 // WithName sets the name for the OpenRouter provider.
 func WithName(name string) Option {
 	return func(o *options) {
