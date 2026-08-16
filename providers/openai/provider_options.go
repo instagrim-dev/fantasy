@@ -66,10 +66,31 @@ type ProviderMetadata struct {
 	Logprobs                 []openai.ChatCompletionTokenLogprob `json:"logprobs"`
 	AcceptedPredictionTokens int64                               `json:"accepted_prediction_tokens"`
 	RejectedPredictionTokens int64                               `json:"rejected_prediction_tokens"`
+	// ToolInputWireState records only whether a Chat Completions stream carried
+	// tool-call arguments on the wire. It deliberately carries no argument
+	// content, names, keys, or inferred values.
+	ToolInputWireState ToolInputWireState `json:"tool_input_wire_state,omitempty"`
 	// ExtraFields captures non-standard fields from the usage object.
 	// Keys are field names, values are raw JSON.
 	ExtraFields map[string]json.RawMessage `json:"extra_fields,omitempty"`
 }
+
+// ToolInputWireState records the bounded wire shape of a streamed function
+// call's arguments. It is distinct from the normalized ToolCallInput value:
+// callers still receive {} for an absent or empty input so existing tool
+// execution remains compatible.
+type ToolInputWireState string
+
+const (
+	// ToolInputWireStateAbsent means the SDK observed no arguments field.
+	ToolInputWireStateAbsent ToolInputWireState = "absent"
+	// ToolInputWireStateEmpty means the SDK observed an explicit empty
+	// arguments value and no non-empty argument delta followed it.
+	ToolInputWireStateEmpty ToolInputWireState = "empty"
+	// ToolInputWireStatePresent means the SDK observed at least one non-empty
+	// argument value or delta.
+	ToolInputWireStatePresent ToolInputWireState = "present"
+)
 
 // ExtraField parses an extra usage field into the provided target.
 // Returns false if the field is not present or cannot be parsed.

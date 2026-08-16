@@ -2349,6 +2349,38 @@ func (sms *streamingMockServer) prepareToolStreamResponseWithEmptyArgs() {
 	sms.chunks = chunks
 }
 
+func (sms *streamingMockServer) prepareToolStreamResponseWithAbsentArgs() {
+	chunks := []string{
+		// The arguments member is absent rather than explicitly empty.
+		`data: {"id":"chatcmpl-absentargs","object":"chat.completion.chunk","created":1711357598,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_absent_args","type":"function","function":{"name":"test-tool"}}]},"finish_reason":null}]}` + "\n\n",
+		`data: {"id":"chatcmpl-absentargs","object":"chat.completion.chunk","created":1711357598,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}
+	sms.chunks = chunks
+}
+
+func (sms *streamingMockServer) prepareEarlyClosedToolStreamResponse() {
+	chunk := func(body string) string {
+		return `data: {"id":"chatcmpl-early-close","object":"chat.completion.chunk","created":1711357598,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":` + body + `,"finish_reason":null}]}` + "\n\n"
+	}
+	sms.chunks = []string{
+		// A later call index closes the first call before final stream close.
+		chunk(`{"tool_calls":[{"index":0,"id":"call_absent","type":"function","function":{"name":"first"}}]}`),
+		chunk(`{"tool_calls":[{"index":1,"id":"call_empty","type":"function","function":{"name":"second","arguments":""}}]}`),
+		`data: {"id":"chatcmpl-early-close","object":"chat.completion.chunk","created":1711357598,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}
+}
+
+func requireToolInputWireState(t *testing.T, part fantasy.StreamPart, want ToolInputWireState) {
+	t.Helper()
+	metadata, ok := part.ProviderMetadata[Name]
+	require.True(t, ok, "expected OpenAI stream metadata")
+	openAIMetadata, ok := metadata.(*ProviderMetadata)
+	require.True(t, ok, "expected OpenAI provider metadata, got %T", metadata)
+	require.Equal(t, want, openAIMetadata.ToolInputWireState)
+}
+
 func (sms *streamingMockServer) prepareToolStreamResponseWithInvalidJSON() {
 	chunks := []string{
 		// Tool call start
@@ -2587,11 +2619,13 @@ func TestDoStream(t *testing.T) {
 				toolDeltas = append(toolDeltas, part.Delta)
 			case fantasy.StreamPartTypeToolInputEnd:
 				toolInputEnd = i
+				requireToolInputWireState(t, part, ToolInputWireStatePresent)
 			case fantasy.StreamPartTypeToolCall:
 				toolCall = i
 				require.Equal(t, "call_O17Uplv4lJvD6DVdIvFFeRMw", part.ID)
 				require.Equal(t, "test-tool", part.ToolCallName)
 				require.Equal(t, `{"value":"Sparkle Day"}`, part.ToolCallInput)
+				requireToolInputWireState(t, part, ToolInputWireStatePresent)
 			}
 		}
 
@@ -2797,18 +2831,80 @@ func TestDoStream(t *testing.T) {
 			case fantasy.StreamPartTypeToolInputEnd:
 				toolInputEnd = i
 				require.Equal(t, "call_empty_args", part.ID)
+				requireToolInputWireState(t, part, ToolInputWireStateEmpty)
 			case fantasy.StreamPartTypeToolCall:
 				toolCall = i
 				require.Equal(t, "call_empty_args", part.ID)
 				require.Equal(t, "test-tool", part.ToolCallName)
 				// Empty arguments should be normalized to "{}"
 				require.Equal(t, "{}", part.ToolCallInput)
+				requireToolInputWireState(t, part, ToolInputWireStateEmpty)
 			}
 		}
 
 		require.NotEqual(t, -1, toolInputStart, "expected ToolInputStart part")
 		require.NotEqual(t, -1, toolInputEnd, "expected ToolInputEnd part")
 		require.NotEqual(t, -1, toolCall, "expected ToolCall part")
+	})
+
+	t.Run("should preserve absent tool arguments as bounded wire state", func(t *testing.T) {
+		t.Parallel()
+
+		server := newStreamingMockServer()
+		defer server.close()
+		server.prepareToolStreamResponseWithAbsentArgs()
+
+		provider, err := New(WithAPIKey("test-api-key"), WithBaseURL(server.server.URL))
+		require.NoError(t, err)
+		model, _ := provider.LanguageModel(t.Context(), "gpt-3.5-turbo")
+		stream, err := model.Stream(context.Background(), fantasy.Call{Prompt: testPrompt, Tools: []fantasy.Tool{fantasy.FunctionTool{Name: "test-tool"}}})
+		require.NoError(t, err)
+
+		parts, err := collectStreamParts(stream)
+		require.NoError(t, err)
+		for _, part := range parts {
+			switch part.Type {
+			case fantasy.StreamPartTypeToolInputEnd:
+				require.Equal(t, "call_absent_args", part.ID)
+				requireToolInputWireState(t, part, ToolInputWireStateAbsent)
+			case fantasy.StreamPartTypeToolCall:
+				require.Equal(t, "call_absent_args", part.ID)
+				require.Equal(t, "{}", part.ToolCallInput, "compatibility normalization remains unchanged")
+				requireToolInputWireState(t, part, ToolInputWireStateAbsent)
+			}
+		}
+	})
+
+	t.Run("should carry wire state on early and final tool-input close", func(t *testing.T) {
+		t.Parallel()
+
+		server := newStreamingMockServer()
+		defer server.close()
+		server.prepareEarlyClosedToolStreamResponse()
+
+		provider, err := New(WithAPIKey("test-api-key"), WithBaseURL(server.server.URL))
+		require.NoError(t, err)
+		model, _ := provider.LanguageModel(t.Context(), "gpt-3.5-turbo")
+		stream, err := model.Stream(context.Background(), fantasy.Call{Prompt: testPrompt, Tools: []fantasy.Tool{fantasy.FunctionTool{Name: "first"}, fantasy.FunctionTool{Name: "second"}}})
+		require.NoError(t, err)
+
+		parts, err := collectStreamParts(stream)
+		require.NoError(t, err)
+		endStates := map[string]ToolInputWireState{}
+		callStates := map[string]ToolInputWireState{}
+		for _, part := range parts {
+			switch part.Type {
+			case fantasy.StreamPartTypeToolInputEnd:
+				metadata := part.ProviderMetadata[Name].(*ProviderMetadata)
+				endStates[part.ID] = metadata.ToolInputWireState
+			case fantasy.StreamPartTypeToolCall:
+				metadata := part.ProviderMetadata[Name].(*ProviderMetadata)
+				callStates[part.ID] = metadata.ToolInputWireState
+				require.Equal(t, "{}", part.ToolCallInput, "normalized execution input remains compatible")
+			}
+		}
+		require.Equal(t, map[string]ToolInputWireState{"call_absent": ToolInputWireStateAbsent, "call_empty": ToolInputWireStateEmpty}, endStates)
+		require.Equal(t, endStates, callStates)
 	})
 
 	t.Run("should stream annotations/citations", func(t *testing.T) {

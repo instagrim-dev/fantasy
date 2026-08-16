@@ -122,7 +122,34 @@ type streamToolCall struct {
 	id          string
 	name        string
 	arguments   string
+	inputState  ToolInputWireState
 	hasFinished bool
+}
+
+func toolInputWireState(arguments string, present bool) ToolInputWireState {
+	if !present {
+		return ToolInputWireStateAbsent
+	}
+	if arguments == "" {
+		return ToolInputWireStateEmpty
+	}
+	return ToolInputWireStatePresent
+}
+
+func mergeToolInputWireState(current, next ToolInputWireState) ToolInputWireState {
+	if current == ToolInputWireStatePresent || next == ToolInputWireStatePresent {
+		return ToolInputWireStatePresent
+	}
+	if current == ToolInputWireStateEmpty || next == ToolInputWireStateEmpty {
+		return ToolInputWireStateEmpty
+	}
+	return ToolInputWireStateAbsent
+}
+
+func toolInputWireMetadata(state ToolInputWireState) fantasy.ProviderMetadata {
+	return fantasy.ProviderMetadata{
+		Name: &ProviderMetadata{ToolInputWireState: state},
+	}
 }
 
 // Model implements fantasy.LanguageModel.
@@ -383,6 +410,8 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 							if existingToolCall.hasFinished {
 								continue
 							}
+							argumentsPresent := toolCallDelta.Function.JSON.Arguments.Valid()
+							existingToolCall.inputState = mergeToolInputWireState(existingToolCall.inputState, toolInputWireState(toolCallDelta.Function.Arguments, argumentsPresent))
 							if toolCallDelta.Function.Arguments != "" {
 								existingToolCall.arguments += toolCallDelta.Function.Arguments
 								if !yield(fantasy.StreamPart{
@@ -431,7 +460,7 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 									tc.arguments = "{}"
 									toolCalls[idx] = tc
 								}
-								if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolInputEnd, ID: tc.id}) {
+								if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolInputEnd, ID: tc.id, ProviderMetadata: toolInputWireMetadata(tc.inputState)}) {
 									return
 								}
 								tc.hasFinished = true
@@ -446,9 +475,10 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 								return
 							}
 							toolCalls[toolCallDelta.Index] = streamToolCall{
-								id:        toolCallDelta.ID,
-								name:      toolCallDelta.Function.Name,
-								arguments: toolCallDelta.Function.Arguments,
+								id:         toolCallDelta.ID,
+								name:       toolCallDelta.Function.Name,
+								arguments:  toolCallDelta.Function.Arguments,
+								inputState: toolInputWireState(toolCallDelta.Function.Arguments, toolCallDelta.Function.JSON.Arguments.Valid()),
 							}
 
 							if toolCallDelta.Function.Arguments != "" {
@@ -517,11 +547,11 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 						tc.arguments = "{}"
 						toolCalls[idx] = tc
 					}
-					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolInputEnd, ID: tc.id}) {
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolInputEnd, ID: tc.id, ProviderMetadata: toolInputWireMetadata(tc.inputState)}) {
 						return
 					}
 				}
-				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: tc.id, ToolCallName: tc.name, ToolCallInput: tc.arguments}) {
+				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: tc.id, ToolCallName: tc.name, ToolCallInput: tc.arguments, ProviderMetadata: toolInputWireMetadata(tc.inputState)}) {
 					return
 				}
 				tc.hasFinished = true
