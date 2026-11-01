@@ -357,7 +357,7 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 	var usage fantasy.Usage
 	var finishReason string
 	var primaryWireFinishReason string
-	var primaryWireFinished, primaryWireConflict bool
+	var primaryWireFinished, primaryWireConflict, nonprimaryChoiceObserved bool
 	return func(yield func(fantasy.StreamPart) bool) {
 		if len(warnings) > 0 {
 			if !yield(fantasy.StreamPart{
@@ -375,6 +375,9 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 				continue
 			}
 			for _, choice := range chunk.Choices {
+				if choice.Index != 0 {
+					nonprimaryChoiceObserved = true
+				}
 				if choice.Index == 0 && primaryWireFinished {
 					primaryWireConflict = true
 				}
@@ -614,7 +617,7 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 			if wireFinish == "" {
 				wireFinish = "missing"
 			}
-			if primaryWireConflict {
+			if primaryWireConflict || nonprimaryChoiceObserved {
 				wireFinish = "other"
 			}
 			if providerMetadata == nil {
