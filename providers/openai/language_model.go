@@ -620,13 +620,8 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 			if primaryWireConflict || nonprimaryChoiceObserved {
 				wireFinish = "other"
 			}
-			if providerMetadata == nil {
-				providerMetadata = fantasy.ProviderMetadata{}
-			}
 			if m, ok := providerMetadata[Name].(*ProviderMetadata); ok && m != nil {
 				m.WireFinishReason = wireFinish
-			} else {
-				providerMetadata[Name] = &ProviderMetadata{WireFinishReason: wireFinish}
 			}
 			yield(fantasy.StreamPart{
 				Type:             fantasy.StreamPartTypeFinish,
