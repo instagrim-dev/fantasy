@@ -5143,3 +5143,59 @@ func TestToolFinishMetadataPreservesWireReason(t *testing.T) {
 		})
 	}
 }
+
+func TestToolFinishMetadataDoesNotBorrowAnotherChoiceFinish(t *testing.T) {
+	server := newStreamingMockServer()
+	defer server.close()
+	server.chunks = []string{
+		`data: {"id":"chatcmpl-wire","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"test-tool","arguments":"{\"a\":1}"}}]},"finish_reason":null},{"index":1,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}
+	provider, err := New(WithAPIKey("test-api-key"), WithBaseURL(server.server.URL))
+	require.NoError(t, err)
+	model, err := provider.LanguageModel(t.Context(), "test")
+	require.NoError(t, err)
+	stream, err := model.Stream(t.Context(), fantasy.Call{Prompt: testPrompt, Tools: []fantasy.Tool{fantasy.FunctionTool{Name: "test-tool", InputSchema: map[string]any{"type": "object"}}}})
+	require.NoError(t, err)
+	parts, err := collectStreamParts(stream)
+	require.NoError(t, err)
+	var finish *fantasy.StreamPart
+	for i := range parts {
+		if parts[i].Type == fantasy.StreamPartTypeFinish {
+			finish = &parts[i]
+		}
+	}
+	require.NotNil(t, finish)
+	meta, ok := finish.ProviderMetadata[Name].(*ProviderMetadata)
+	require.True(t, ok)
+	require.Equal(t, "missing", meta.WireFinishReason)
+}
+
+func TestToolFinishMetadataRejectsPostFinishPrimaryChunk(t *testing.T) {
+	server := newStreamingMockServer()
+	defer server.close()
+	server.chunks = []string{
+		`data: {"id":"wire","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"test-tool","arguments":"{\"a\":1}"}}]},"finish_reason":null}]}` + "\n\n",
+		`data: {"id":"wire","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+		`data: {"id":"wire","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"extra"},"finish_reason":null}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}
+	provider, err := New(WithAPIKey("test-api-key"), WithBaseURL(server.server.URL))
+	require.NoError(t, err)
+	model, err := provider.LanguageModel(t.Context(), "test")
+	require.NoError(t, err)
+	stream, err := model.Stream(t.Context(), fantasy.Call{Prompt: testPrompt, Tools: []fantasy.Tool{fantasy.FunctionTool{Name: "test-tool", InputSchema: map[string]any{"type": "object"}}}})
+	require.NoError(t, err)
+	parts, err := collectStreamParts(stream)
+	require.NoError(t, err)
+	var finish *fantasy.StreamPart
+	for i := range parts {
+		if parts[i].Type == fantasy.StreamPartTypeFinish {
+			finish = &parts[i]
+		}
+	}
+	require.NotNil(t, finish)
+	meta, ok := finish.ProviderMetadata[Name].(*ProviderMetadata)
+	require.True(t, ok)
+	require.Equal(t, "other", meta.WireFinishReason)
+}
