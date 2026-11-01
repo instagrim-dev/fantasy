@@ -597,6 +597,22 @@ func (o languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S
 				})
 				return
 			}
+			wireFinish := "other"
+			switch finishReason {
+			case "", "tool_calls", "stop", "length", "content_filter":
+				wireFinish = finishReason
+			}
+			if wireFinish == "" {
+				wireFinish = "missing"
+			}
+			if providerMetadata == nil {
+				providerMetadata = fantasy.ProviderMetadata{}
+			}
+			if m, ok := providerMetadata[Name].(*ProviderMetadata); ok && m != nil {
+				m.WireFinishReason = wireFinish
+			} else {
+				providerMetadata[Name] = &ProviderMetadata{WireFinishReason: wireFinish}
+			}
 			yield(fantasy.StreamPart{
 				Type:             fantasy.StreamPartTypeFinish,
 				Usage:            usage,

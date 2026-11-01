@@ -63,6 +63,9 @@ func init() {
 
 // ProviderMetadata represents additional metadata from OpenAI provider.
 type ProviderMetadata struct {
+	// WireFinishReason records the bounded Chat Completions finish_reason
+	// actually received from the wire. It is not inferred from tool calls.
+	WireFinishReason         string                              `json:"wire_finish_reason,omitempty"`
 	Logprobs                 []openai.ChatCompletionTokenLogprob `json:"logprobs"`
 	AcceptedPredictionTokens int64                               `json:"accepted_prediction_tokens"`
 	RejectedPredictionTokens int64                               `json:"rejected_prediction_tokens"`
